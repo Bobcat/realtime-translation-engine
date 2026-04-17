@@ -3,13 +3,13 @@ from __future__ import annotations
 from dataclasses import replace
 import time
 
-from .core import TranslationCore
-from .source import SourceEvent
-from .source import SourceTranscriptState
-from .translator import TranslationMetrics
-from .translator import Translator
-from .types import TranslationDecision
-from .types import TranslationOpportunity
+from ..core import TranslationCore
+from ..source import SourceEvent
+from ..source import SourceTranscriptState
+from ..translator import TranslationMetrics
+from ..translator import Translator
+from ..types import TranslationDecision
+from ..types import TranslationOpportunity
 
 
 class ReplayRunner:

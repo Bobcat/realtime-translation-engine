@@ -119,19 +119,19 @@ class TranslationCoreTests(unittest.TestCase):
         self.assertTrue(first_decision.triggered)
         self.assertEqual(first_decision.source_window, "one")
         self.assertEqual(first_decision.source_chunks_used, 1)
-        self.assertEqual(second_decision.source_window, "one\n two")
+        self.assertEqual(second_decision.source_window, "one two")
         self.assertEqual(second_decision.source_chunks_used, 2)
-        self.assertEqual(third_decision.source_window, "one\n two\n three.")
+        self.assertEqual(third_decision.source_window, "one two three.")
         self.assertEqual(third_decision.source_chunks_used, 3)
-        self.assertEqual(translator.calls, ["one", "one\n two", "one\n two\n three."])
+        self.assertEqual(translator.calls, ["one", "one two", "one two three."])
 
     def test_target_state_commits_only_on_source_sentence_boundary(self) -> None:
         translator = WindowTranslator(
             {
                 "Hello": "Hallo",
-                "Hello\n world.": "Hallo wereld.",
+                "Hello world.": "Hallo wereld.",
                 " How are": "Hoe gaat",
-                " How are\n you?": "Hoe gaat het?",
+                " How are you?": "Hoe gaat het?",
             }
         )
         core = TranslationCore()
@@ -162,14 +162,14 @@ class TranslationCoreTests(unittest.TestCase):
         self.assertEqual(runner.target_state.target_preview_text, "")
         self.assertEqual(
             translator.calls,
-            ["Hello", "Hello\n world.", " How are", " How are\n you?"],
+            ["Hello", "Hello world.", " How are", " How are you?"],
         )
 
     def test_preview_event_translates_when_preview_is_stable_and_long_enough(self) -> None:
         translator = WindowTranslator(
             {
                 "Hello": "Hallo",
-                "Hello\n world and more text": "Hallo wereld en meer tekst",
+                "Hello world and more text": "Hallo wereld en meer tekst",
             }
         )
         preview_settings = PreviewTranslationSettings(
@@ -197,9 +197,9 @@ class TranslationCoreTests(unittest.TestCase):
         self.assertFalse(first_preview_decision.triggered)
         self.assertTrue(second_preview_decision.triggered)
         self.assertEqual(second_preview_decision.reason, "preview_event_translated")
-        self.assertEqual(second_preview_decision.source_window, "Hello\n world and more text")
+        self.assertEqual(second_preview_decision.source_window, "Hello world and more text")
         self.assertEqual(runner.target_state.target_preview_text, "Hallo wereld en meer tekst")
-        self.assertEqual(translator.calls, ["Hello", "Hello\n world and more text"])
+        self.assertEqual(translator.calls, ["Hello", "Hello world and more text"])
 
     def test_replay_of_small_example_keeps_preview_and_translates_on_c_only(self) -> None:
         events = [
@@ -245,15 +245,15 @@ class TranslationCoreTests(unittest.TestCase):
         self.assertEqual(second_decision.target_preview_text, "")
         self.assertEqual(
             translator.translate_calls,
-            ["Hello", "Hello\n world."],
+            ["Hello", "Hello world."],
         )
         self.assertEqual(
             translator.revise_calls,
-            [("Hello\n world.", "DRAFT::Hello\n world.", None)],
+            [("Hello world.", "DRAFT::Hello world.", None)],
         )
         self.assertEqual(
             runner.target_state.target_committed_text,
-            "FINAL::DRAFT::Hello\n world.",
+            "FINAL::DRAFT::Hello world.",
         )
         self.assertEqual(second_decision.model, "reviser")
 

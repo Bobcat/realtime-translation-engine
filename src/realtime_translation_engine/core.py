@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .config import PreviewTranslationSettings
+from .source import assemble_source_text
 from .source import SourceEvent
 from .source import SourceTranscriptState
 from .types import CoreEventResult
@@ -133,7 +134,7 @@ class TranslationCore:
         chunks = [chunk for chunk in self.open_source_chunks if chunk]
         if not chunks:
             return ""
-        return "\n".join(chunks)
+        return assemble_source_text(chunks)
 
     def _build_preview_source_window(self, source_preview_text: str) -> str:
         parts = [chunk for chunk in self.open_source_chunks if chunk]
@@ -141,7 +142,7 @@ class TranslationCore:
             parts.append(source_preview_text)
         if not parts:
             return ""
-        return "\n".join(parts)
+        return assemble_source_text(parts)
 
     def _reset_preview_run_state(self) -> None:
         self.previous_source_preview_text = ""
