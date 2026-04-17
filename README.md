@@ -47,16 +47,6 @@ The application is responsible for:
 
 Both runners use the same `TranslationCore`.
 
-## Out of Scope
-
-This package does not contain:
-
-- transport or API integration
-- session orchestration
-- prompt storage or prompt library management
-- model loading or model administration
-- application-specific UI concerns
-
 ## Design Notes
 
 - [Event-Driven Translation Engine Note](docs/event-driven-translation-engine-note.md)
