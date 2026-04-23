@@ -4,9 +4,9 @@
 
 Applications produce source events. Source events are incremental text updates, such as preview text and committed text. The engine ingests those events, applies translation gating, decides when to issue new translation requests to an LLM, and maintains preview and committed target state over time.
 
-Applications also provide the translator component that actually sends those requests to the LLM and returns the results.
+The package also includes translator implementations under `realtime_translation_engine.translators`.
 
-## Package Surface
+## Package Exports
 
 The package exposes:
 
@@ -19,6 +19,7 @@ The package exposes:
 - `Translator`
 - `TranslationResult`
 - `TranslationMetrics`
+- `realtime_translation_engine.translators`
 
 ## Responsibilities
 
@@ -33,9 +34,8 @@ The engine is responsible for:
 The application is responsible for:
 
 - producing source events
-- providing the translator integration that talks to the LLM
 - choosing prompts and models
-- handling transport, sessions, and application UI
+- handling sessions and application UI
 
 ## Runners
 
@@ -47,6 +47,12 @@ The application is responsible for:
 
 Both runners use the same `TranslationCore`.
 
+## LLM Integration
+
+Translation requests are executed through the `Translator` interface.
+
+This package includes a concrete `Translator` implementation using [llm-pool](https://github.com/Bobcat/llm-pool), under `realtime_translation_engine.translators`.
+
 ## Design Notes
 
 - [Event-Driven Translation Engine Note](docs/event-driven-translation-engine-note.md)
@@ -57,5 +63,5 @@ Both runners use the same `TranslationCore`.
 Run tests:
 
 ```bash
-PYTHONPATH=src python3 -m unittest tests.test_core tests.test_live_runner tests.test_source_state
+PYTHONPATH=src python3 -m unittest tests.test_core tests.test_live_runner tests.test_source_state tests.test_translators
 ```
