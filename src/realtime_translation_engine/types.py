@@ -52,5 +52,5 @@ class TranslationDecision:
     request_id: str = ""
     model: str = ""
     first_pass_model: str = ""
-    correction_model: str = ""
+    second_pass_model: str = ""
     metrics: TranslationMetrics = field(default_factory=TranslationMetrics)

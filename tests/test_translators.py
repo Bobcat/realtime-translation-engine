@@ -35,26 +35,26 @@ class BuildTranslatorTests(unittest.TestCase):
             translator = build_translator("llm-responses")
         self.assertIs(translator, marker)
 
-    def test_build_translator_llm_responses_passes_service_correction_and_templates(self) -> None:
+    def test_build_translator_llm_responses_passes_service_second_pass_and_templates(self) -> None:
         marker = object()
         with patch("realtime_translation_engine.translators.LlmResponsesTranslator", return_value=marker) as ctor:
             translator = build_translator(
                 "llm-responses",
                 service_model="qwen2.5-14b-instruct-ct2-int8",
-                correction_model="phi-4-ct2-int8",
+                second_pass_model="phi-4-ct2-int8",
                 first_pass_prompt="Translate to Dutch only.",
                 first_pass_input_template="INPUT={{source_window}}",
-                correction_input_template="SRC={{source_window}} D={{draft_translation}}",
+                second_pass_input_template="SRC={{source_window}} D={{draft_translation}}",
                 source_language="English",
                 target_language="Dutch",
             )
         self.assertIs(translator, marker)
         ctor.assert_called_once_with(
             model="qwen2.5-14b-instruct-ct2-int8",
-            correction_model="phi-4-ct2-int8",
+            second_pass_model="phi-4-ct2-int8",
             first_pass_prompt="Translate to Dutch only.",
             first_pass_input_template="INPUT={{source_window}}",
-            correction_input_template="SRC={{source_window}} D={{draft_translation}}",
+            second_pass_input_template="SRC={{source_window}} D={{draft_translation}}",
             source_language="English",
             target_language="Dutch",
         )
@@ -219,11 +219,11 @@ class BuildTranslatorTests(unittest.TestCase):
 
         self.assertEqual(result.text, "Hallo wereld")
 
-    def test_revise_translation_posts_source_and_draft_to_correction_model(self) -> None:
+    def test_run_second_pass_posts_source_and_draft_to_second_pass_model(self) -> None:
         translator = LlmResponsesTranslator(
             service_base_url="http://127.0.0.1:8010",
             model="phi-4-ct2-int8",
-            correction_model="eurollm-9b-ct2-int8",
+            second_pass_model="eurollm-9b-ct2-int8",
         )
 
         with patch(
@@ -237,7 +237,7 @@ class BuildTranslatorTests(unittest.TestCase):
                 'data: {"id":"resp_4","output_text":"Hallo wereld"}\n\n'
             ),
         ) as mock_urlopen:
-            result = translator.revise_translation("Hello world", "Hoi wereld")
+            result = translator.run_second_pass("Hello world", "Hoi wereld")
 
         self.assertEqual(result.text, "Hallo wereld")
         request_obj = mock_urlopen.call_args.args[0]
@@ -247,15 +247,15 @@ class BuildTranslatorTests(unittest.TestCase):
             payload["input"],
             "Source text:\nHello world\n\nDraft Dutch translation:\nHoi wereld",
         )
-        self.assertIn("You are correcting a Dutch translation.", payload["instructions"])
-        self.assertIn("Return only the final corrected Dutch translation.", payload["instructions"])
+        self.assertIn("You are the second pass of a translation pipeline", payload["instructions"])
+        self.assertIn("Return only the final Dutch translation.", payload["instructions"])
 
-    def test_revise_translation_uses_correction_input_template(self) -> None:
+    def test_run_second_pass_uses_second_pass_input_template(self) -> None:
         translator = LlmResponsesTranslator(
             service_base_url="http://127.0.0.1:8010",
             model="phi-4-ct2-int8",
-            correction_model="eurollm-9b-ct2-int8",
-            correction_input_template="SRC={{source_window}}\nDRAFT={{draft_translation}}",
+            second_pass_model="eurollm-9b-ct2-int8",
+            second_pass_input_template="SRC={{source_window}}\nDRAFT={{draft_translation}}",
         )
 
         with patch(
@@ -267,17 +267,17 @@ class BuildTranslatorTests(unittest.TestCase):
                 'data: {"id":"resp_tpl_2","output_text":"ok"}\n\n'
             ),
         ) as mock_urlopen:
-            translator.revise_translation("SRC", "DRAFT")
+            translator.run_second_pass("SRC", "DRAFT")
 
         request_obj = mock_urlopen.call_args.args[0]
         payload = json.loads(request_obj.data.decode("utf-8"))
         self.assertEqual(payload["input"], "SRC=SRC\nDRAFT=DRAFT")
 
-    def test_revise_translation_runs_second_call_when_correction_model_matches_first_pass(self) -> None:
+    def test_run_second_pass_runs_second_call_when_second_pass_model_matches_first_pass(self) -> None:
         translator = LlmResponsesTranslator(
             service_base_url="http://127.0.0.1:8010",
             model="eurollm-9b-ct2-int8",
-            correction_model="eurollm-9b-ct2-int8",
+            second_pass_model="eurollm-9b-ct2-int8",
         )
 
         with patch(
@@ -291,7 +291,7 @@ class BuildTranslatorTests(unittest.TestCase):
                 'data: {"id":"resp_5","output_text":"Verbeterde vertaling"}\n\n'
             ),
         ) as mock_urlopen:
-            result = translator.revise_translation("Hello world", "Hallo wereld")
+            result = translator.run_second_pass("Hello world", "Hallo wereld")
 
         self.assertEqual(result.text, "Verbeterde vertaling")
         self.assertEqual(result.model, "eurollm-9b-ct2-int8")

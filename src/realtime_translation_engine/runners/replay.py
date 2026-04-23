@@ -18,14 +18,14 @@ class ReplayRunner:
         *,
         translator: Translator,
         core: TranslationCore | None = None,
-        commit_correction_enabled: bool = True,
-        commit_correction_prompt: str | None = None,
+        second_pass_enabled: bool = True,
+        second_pass_prompt: str | None = None,
         no_translator_mode: bool = False,
     ) -> None:
         self.translator = translator
         self.core = core or TranslationCore()
-        self.commit_correction_enabled = commit_correction_enabled
-        self.commit_correction_prompt = commit_correction_prompt
+        self.second_pass_enabled = second_pass_enabled
+        self.second_pass_prompt = second_pass_prompt
         self.no_translator_mode = no_translator_mode
 
     @property
@@ -58,7 +58,7 @@ class ReplayRunner:
         self.core.mark_opportunity_dispatched(opportunity)
 
         request_id = ""
-        correction_model = ""
+        second_pass_model = ""
         metrics = TranslationMetrics()
         output_text = opportunity.source_window
 
@@ -66,24 +66,24 @@ class ReplayRunner:
             reason = "preview_event_passthrough"
         elif not opportunity.commits_target:
             reason = "committed_event_passthrough_preview"
-        elif self.commit_correction_enabled:
+        elif self.second_pass_enabled:
             started = time.perf_counter()
-            revised = self.translator.revise_translation(
+            second_pass_result = self.translator.run_second_pass(
                 opportunity.source_window,
                 opportunity.source_window,
-                system_prompt=self.commit_correction_prompt,
+                system_prompt=self.second_pass_prompt,
             )
-            output_text = revised.text
-            request_id = revised.request_id
-            correction_model = revised.model
+            output_text = second_pass_result.text
+            request_id = second_pass_result.request_id
+            second_pass_model = second_pass_result.model
             replay_request_wall_ms = (time.perf_counter() - started) * 1000.0
             metrics = replace(
-                revised.metrics,
+                second_pass_result.metrics,
                 replay_request_wall_ms=replay_request_wall_ms,
                 observed_first_text_ms=replay_request_wall_ms,
                 observed_complete_ms=replay_request_wall_ms,
             )
-            reason = "committed_event_passthrough_revised"
+            reason = "committed_event_passthrough_second_pass"
         else:
             reason = "committed_event_passthrough"
 
@@ -95,7 +95,7 @@ class ReplayRunner:
             target_preview_text=self.target_state.target_preview_text,
             source_chunks_used=opportunity.source_chunks_used,
             request_id=request_id,
-            correction_model=correction_model,
+            second_pass_model=second_pass_model,
             metrics=metrics,
         )
 
@@ -109,15 +109,15 @@ class ReplayRunner:
         translation = self.translator.translate(opportunity.source_window)
         first_pass_model = translation.model
         final_translation = translation
-        correction_model = ""
+        second_pass_model = ""
 
-        if opportunity.lane == "commit" and opportunity.commits_target and self.commit_correction_enabled:
-            final_translation = self.translator.revise_translation(
+        if opportunity.lane == "commit" and opportunity.commits_target and self.second_pass_enabled:
+            final_translation = self.translator.run_second_pass(
                 opportunity.source_window,
                 translation.text,
-                system_prompt=self.commit_correction_prompt,
+                system_prompt=self.second_pass_prompt,
             )
-            correction_model = final_translation.model
+            second_pass_model = final_translation.model
 
         replay_request_wall_ms = (time.perf_counter() - started) * 1000.0
         self.core.apply_result(opportunity, final_translation.text)
@@ -140,6 +140,6 @@ class ReplayRunner:
             request_id=final_translation.request_id,
             model=final_translation.model,
             first_pass_model=first_pass_model,
-            correction_model=correction_model,
+            second_pass_model=second_pass_model,
             metrics=metrics,
         )

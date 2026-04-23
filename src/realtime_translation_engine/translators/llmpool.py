@@ -13,8 +13,8 @@ from ..translator import TranslationResult
 DEFAULT_TARGET_LANGUAGE = "Dutch"
 DEFAULT_SOURCE_LANGUAGE = "English"
 DEFAULT_LLM_RESPONSES_API_MODEL = os.environ.get("LLM_RESPONSES_API_MODEL", "eurollm-9b-ct2-int8")
-DEFAULT_LLM_RESPONSES_API_CORRECTION_MODEL = os.environ.get(
-    "LLM_RESPONSES_API_CORRECTION_MODEL",
+DEFAULT_LLM_RESPONSES_API_SECOND_PASS_MODEL = os.environ.get(
+    "LLM_RESPONSES_API_SECOND_PASS_MODEL",
     "phi-4-ct2-int8",
 )
 DEFAULT_LLM_RESPONSES_API_BASE_URL = os.environ.get("LLM_RESPONSES_API_BASE_URL", "http://127.0.0.1:8011")
@@ -24,12 +24,12 @@ DEFAULT_LLM_RESPONSES_API_BASE_URL = os.environ.get("LLM_RESPONSES_API_BASE_URL"
 class LlmResponsesTranslator:
     service_base_url: str = DEFAULT_LLM_RESPONSES_API_BASE_URL
     model: str = DEFAULT_LLM_RESPONSES_API_MODEL
-    correction_model: str = DEFAULT_LLM_RESPONSES_API_CORRECTION_MODEL
+    second_pass_model: str = DEFAULT_LLM_RESPONSES_API_SECOND_PASS_MODEL
     first_pass_prompt: str | None = None
     first_pass_input_template: str = "{{source_window}}"
     first_pass_inline_user_prompt: bool = False
-    correction_inline_user_prompt: bool = False
-    correction_input_template: str = (
+    second_pass_inline_user_prompt: bool = False
+    second_pass_input_template: str = (
         "Source text:\n"
         "{{source_window}}\n\n"
         "Draft Dutch translation:\n"
@@ -79,7 +79,7 @@ class LlmResponsesTranslator:
             system_prompt=first_pass_prompt,
         )
 
-    def revise_translation(
+    def run_second_pass(
         self,
         source_window: str,
         draft_translation: str,
@@ -88,27 +88,27 @@ class LlmResponsesTranslator:
     ) -> TranslationResult:
         if draft_translation.strip() == "":
             return TranslationResult(text=draft_translation, model=self.model)
-        correction_model = self.correction_model.strip()
-        if correction_model == "":
+        second_pass_model = self.second_pass_model.strip()
+        if second_pass_model == "":
             return TranslationResult(text=draft_translation, model=self.model)
-        revision_prompt = system_prompt if system_prompt is not None else self._revision_system_prompt()
-        correction_input = render_translation_template(
-            self.correction_input_template,
+        second_pass_prompt = system_prompt if system_prompt is not None else self._second_pass_system_prompt()
+        second_pass_input = render_translation_template(
+            self.second_pass_input_template,
             source_window=source_window,
             draft_translation=draft_translation,
             source_language=self.source_language,
             target_language=self.target_language,
         )
-        if correction_input.strip() == "":
-            correction_input = draft_translation
-        correction_translator = LlmResponsesTranslator(
+        if second_pass_input.strip() == "":
+            second_pass_input = draft_translation
+        second_pass_translator = LlmResponsesTranslator(
             service_base_url=self.service_base_url,
-            model=correction_model,
-            correction_model=correction_model,
+            model=second_pass_model,
+            second_pass_model=second_pass_model,
             first_pass_input_template=self.first_pass_input_template,
             first_pass_inline_user_prompt=self.first_pass_inline_user_prompt,
-            correction_inline_user_prompt=self.correction_inline_user_prompt,
-            correction_input_template=self.correction_input_template,
+            second_pass_inline_user_prompt=self.second_pass_inline_user_prompt,
+            second_pass_input_template=self.second_pass_input_template,
             source_language=self.source_language,
             target_language=self.target_language,
             max_length=self.max_length,
@@ -118,19 +118,19 @@ class LlmResponsesTranslator:
             repetition_penalty=self.repetition_penalty,
             timeout_seconds=self.timeout_seconds,
         )
-        if self.correction_inline_user_prompt:
-            inline_input = self._build_revision_inline_user_prompt(
-                prompt=revision_prompt,
+        if self.second_pass_inline_user_prompt:
+            inline_input = self._build_second_pass_inline_user_prompt(
+                prompt=second_pass_prompt,
                 source_window=source_window,
                 draft_translation=draft_translation,
             )
-            return correction_translator.translate_with_system_prompt(
+            return second_pass_translator.translate_with_system_prompt(
                 inline_input,
                 system_prompt=" ",
             )
-        return correction_translator.translate_with_system_prompt(
-            correction_input,
-            system_prompt=revision_prompt,
+        return second_pass_translator.translate_with_system_prompt(
+            second_pass_input,
+            system_prompt=second_pass_prompt,
         )
 
     def translate_with_system_prompt(
@@ -168,16 +168,16 @@ class LlmResponsesTranslator:
             "Return only the translation."
         )
 
-    def _revision_system_prompt(self) -> str:
+    def _second_pass_system_prompt(self) -> str:
         return (
-            "You are correcting a Dutch translation. "
+            "You are the second pass of a translation pipeline for Dutch output. "
             "You receive source text and a draft Dutch translation. "
             "Produce clean, idiomatic Dutch and correct clear language errors in the draft. "
             "If the draft contains malformed or non-Dutch words, replace them with the most likely correct Dutch wording. "
             "Fix obvious mistranscription effects from the source when the intended meaning is clear. "
             "Preserve meaning and factual content; do not add new information. "
             "If genuinely ambiguous, choose the safest natural Dutch wording closest to the source intent. "
-            "Return only the final corrected Dutch translation."
+            "Return only the final Dutch translation."
         )
 
     def _build_first_pass_inline_user_prompt(self, *, prompt: str, source_window: str) -> str:
@@ -193,7 +193,7 @@ class LlmResponsesTranslator:
             f"=====\n"
         )
 
-    def _build_revision_inline_user_prompt(
+    def _build_second_pass_inline_user_prompt(
         self,
         *,
         prompt: str,

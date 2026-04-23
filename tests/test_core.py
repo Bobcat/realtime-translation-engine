@@ -19,7 +19,7 @@ class RecordingTranslator(Translator):
         self.calls.append(source_window)
         return TranslationResult(text=f"T::{source_window}", model="recording")
 
-    def revise_translation(
+    def run_second_pass(
         self,
         source_window: str,
         draft_translation: str,
@@ -40,7 +40,7 @@ class WindowTranslator(Translator):
         self.calls.append(source_window)
         return TranslationResult(text=self.mapping[source_window], model="window")
 
-    def revise_translation(
+    def run_second_pass(
         self,
         source_window: str,
         draft_translation: str,
@@ -52,24 +52,24 @@ class WindowTranslator(Translator):
         return TranslationResult(text=draft_translation, model="window")
 
 
-class RevisingTranslator(Translator):
+class SecondPassTranslator(Translator):
     def __init__(self) -> None:
         self.translate_calls: list[str] = []
-        self.revise_calls: list[tuple[str, str, str | None]] = []
+        self.second_pass_calls: list[tuple[str, str, str | None]] = []
 
     def translate(self, source_window: str) -> TranslationResult:
         self.translate_calls.append(source_window)
         return TranslationResult(text=f"DRAFT::{source_window}", model="first-pass")
 
-    def revise_translation(
+    def run_second_pass(
         self,
         source_window: str,
         draft_translation: str,
         *,
         system_prompt: str | None = None,
     ) -> TranslationResult:
-        self.revise_calls.append((source_window, draft_translation, system_prompt))
-        return TranslationResult(text=f"FINAL::{draft_translation}", model="reviser")
+        self.second_pass_calls.append((source_window, draft_translation, system_prompt))
+        return TranslationResult(text=f"FINAL::{draft_translation}", model="second-pass")
 
 
 class TranslationCoreTests(unittest.TestCase):
@@ -228,8 +228,8 @@ class TranslationCoreTests(unittest.TestCase):
         self.assertEqual(runner.target_state.target_committed_text, "T::Hello. T:: How are you?")
         self.assertEqual(runner.target_state.target_preview_text, "")
 
-    def test_commit_revision_runs_only_on_sentence_boundary(self) -> None:
-        translator = RevisingTranslator()
+    def test_second_pass_runs_only_on_sentence_boundary(self) -> None:
+        translator = SecondPassTranslator()
         runner = ReplayRunner(translator=translator)
         source_state = SourceTranscriptState()
 
@@ -248,20 +248,20 @@ class TranslationCoreTests(unittest.TestCase):
             ["Hello", "Hello world."],
         )
         self.assertEqual(
-            translator.revise_calls,
+            translator.second_pass_calls,
             [("Hello world.", "DRAFT::Hello world.", None)],
         )
         self.assertEqual(
             runner.target_state.target_committed_text,
             "FINAL::DRAFT::Hello world.",
         )
-        self.assertEqual(second_decision.model, "reviser")
+        self.assertEqual(second_decision.model, "second-pass")
 
-    def test_commit_revision_can_be_disabled(self) -> None:
-        translator = RevisingTranslator()
+    def test_second_pass_can_be_disabled(self) -> None:
+        translator = SecondPassTranslator()
         runner = ReplayRunner(
             translator=translator,
-            commit_correction_enabled=False,
+            second_pass_enabled=False,
         )
         source_state = SourceTranscriptState()
 
@@ -273,7 +273,7 @@ class TranslationCoreTests(unittest.TestCase):
         source_state.apply_event(second_event)
         second_decision = runner.handle_event(second_event, source_state)
 
-        self.assertEqual(translator.revise_calls, [])
+        self.assertEqual(translator.second_pass_calls, [])
         self.assertEqual(second_decision.model, "first-pass")
 
 

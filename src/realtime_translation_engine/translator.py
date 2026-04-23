@@ -9,7 +9,7 @@ class Translator(Protocol):
     def translate(self, source_window: str) -> "TranslationResult":
         ...
 
-    def revise_translation(
+    def run_second_pass(
         self,
         source_window: str,
         draft_translation: str,
