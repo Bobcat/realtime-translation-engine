@@ -27,6 +27,11 @@ class TranslationMetrics:
     transport_first_byte_ms: float | None = None
     transport_first_text_delta_ms: float | None = None
     transport_completed_ms: float | None = None
+    engine_queue_wait_ms: float | None = None
+    backend_inference_wall_ms: float | None = None
+    engine_total_wall_ms: float | None = None
+    engine_outside_backend_wall_ms: float | None = None
+    pool_total_wall_ms: float | None = None
     engine_tokenize_ms: float | None = None
     gpu_time_to_first_token_ms: float | None = None
     gpu_generate_total_ms: float | None = None

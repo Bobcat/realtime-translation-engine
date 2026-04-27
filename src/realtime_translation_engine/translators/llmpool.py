@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import field
+import http.client
 import json
 import os
 import time
-from urllib import error
-from urllib import request
+from urllib.parse import SplitResult
+from urllib.parse import urlsplit
 
 from ..translator import TranslationMetrics
 from ..translator import TranslationResult
@@ -43,6 +45,12 @@ class LlmResponsesTranslator:
     sampling_temperature: float = 0.1
     repetition_penalty: float = 1.0
     timeout_seconds: float = 120.0
+    _connection: http.client.HTTPConnection | http.client.HTTPSConnection | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    _second_pass_translator: LlmResponsesTranslator | None = field(default=None, init=False, repr=False)
 
     def translate(self, source_window: str) -> TranslationResult:
         first_pass_prompt = (self.first_pass_prompt or "").strip()
@@ -101,23 +109,7 @@ class LlmResponsesTranslator:
         )
         if second_pass_input.strip() == "":
             second_pass_input = draft_translation
-        second_pass_translator = LlmResponsesTranslator(
-            service_base_url=self.service_base_url,
-            model=second_pass_model,
-            second_pass_model=second_pass_model,
-            first_pass_input_template=self.first_pass_input_template,
-            first_pass_inline_user_prompt=self.first_pass_inline_user_prompt,
-            second_pass_inline_user_prompt=self.second_pass_inline_user_prompt,
-            second_pass_input_template=self.second_pass_input_template,
-            source_language=self.source_language,
-            target_language=self.target_language,
-            max_length=self.max_length,
-            sampling_topk=self.sampling_topk,
-            sampling_topp=self.sampling_topp,
-            sampling_temperature=self.sampling_temperature,
-            repetition_penalty=self.repetition_penalty,
-            timeout_seconds=self.timeout_seconds,
-        )
+        second_pass_translator = self if second_pass_model == self.model else self._get_second_pass_translator()
         if self.second_pass_inline_user_prompt:
             inline_input = self._build_second_pass_inline_user_prompt(
                 prompt=second_pass_prompt,
@@ -148,7 +140,7 @@ class LlmResponsesTranslator:
             "model": self.model,
             "input": source_window,
             "instructions": system_prompt,
-            "stream": True,
+            "stream": False,
             "decoding": {
                 "beam_size": beam_size,
                 "top_k": self.sampling_topk if sampling_topk is None else sampling_topk,
@@ -220,143 +212,145 @@ class LlmResponsesTranslator:
 
     def _submit_request(self, payload: dict[str, object]) -> TranslationResult:
         body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
-        req = request.Request(
-            url=f"{self.service_base_url.rstrip('/')}/v1/responses",
-            data=body,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "text/event-stream",
-            },
-            method="POST",
-        )
         request_started = time.perf_counter()
         try:
-            with request.urlopen(req, timeout=self.timeout_seconds) as response:
-                transport_first_byte_ms = (time.perf_counter() - request_started) * 1000.0
-                return self._read_sse_response(
-                    response,
-                    request_started=request_started,
-                    transport_first_byte_ms=transport_first_byte_ms,
-                )
-        except error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"llm-responses API HTTP {exc.code}: {detail.strip() or exc.reason}"
-            ) from exc
-        except error.URLError as exc:
-            raise RuntimeError(f"llm-responses API unavailable: {exc.reason}") from exc
+            return self._execute_request(body, request_started=request_started, retry_stale_connection=True)
+        except OSError as exc:
+            self._close_connection()
+            raise RuntimeError(f"llm-responses API unavailable: {exc}") from exc
 
-    def _read_sse_response(
+    def _execute_request(
         self,
-        response: object,
+        body: bytes,
+        *,
+        request_started: float,
+        retry_stale_connection: bool,
+    ) -> TranslationResult:
+        try:
+            connection = self._get_connection()
+            connection.request(
+                "POST",
+                self._responses_path(),
+                body=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+            )
+            response = connection.getresponse()
+            transport_first_byte_ms = (time.perf_counter() - request_started) * 1000.0
+            raw_body = response.read()
+        except (
+            BrokenPipeError,
+            ConnectionResetError,
+            http.client.BadStatusLine,
+            http.client.CannotSendRequest,
+            http.client.RemoteDisconnected,
+            http.client.ResponseNotReady,
+        ) as exc:
+            self._close_connection()
+            if retry_stale_connection:
+                return self._execute_request(
+                    body,
+                    request_started=request_started,
+                    retry_stale_connection=False,
+                )
+            raise RuntimeError(f"llm-responses API unavailable: {exc}") from exc
+
+        if response.status >= 400:
+            detail = raw_body.decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"llm-responses API HTTP {response.status}: {detail.strip() or response.reason}"
+            )
+
+        return self._read_json_response(
+            raw_body,
+            request_started=request_started,
+            transport_first_byte_ms=transport_first_byte_ms,
+        )
+
+    def _read_json_response(
+        self,
+        raw_body: bytes,
         *,
         request_started: float,
         transport_first_byte_ms: float,
     ) -> TranslationResult:
-        deltas: list[str] = []
-        event_name = ""
-        data_lines: list[str] = []
-        request_id = ""
-        response_model = self.model
-        response_metrics_payload: dict[str, object] = {}
-        transport_first_text_delta_ms: float | None = None
-
-        for raw_line in response:
-            line = raw_line.decode("utf-8").rstrip("\r\n")
-            if line == "":
-                completed_result = self._handle_sse_event(
-                    event_name,
-                    data_lines,
-                    deltas,
-                    request_started=request_started,
-                    request_id=request_id,
-                    response_model=response_model,
-                    transport_first_byte_ms=transport_first_byte_ms,
-                    transport_first_text_delta_ms=transport_first_text_delta_ms,
-                    response_metrics_payload=response_metrics_payload,
-                )
-                if completed_result is not None:
-                    return completed_result
-                if event_name == "response.created" and data_lines:
-                    payload = json.loads("\n".join(data_lines))
-                    request_id = str(payload.get("id", request_id))
-                    response_model = str(payload.get("model", response_model))
-                elif event_name == "response.output_text.delta" and data_lines and transport_first_text_delta_ms is None:
-                    transport_first_text_delta_ms = (time.perf_counter() - request_started) * 1000.0
-                elif event_name == "response.metrics" and data_lines:
-                    payload = json.loads("\n".join(data_lines))
-                    metrics_payload = payload.get("metrics", {})
-                    if isinstance(metrics_payload, dict):
-                        response_metrics_payload = dict(metrics_payload)
-                event_name = ""
-                data_lines = []
-                continue
-            if line.startswith(":"):
-                continue
-            if line.startswith("event:"):
-                event_name = line.split(":", 1)[1].strip()
-                continue
-            if line.startswith("data:"):
-                data_lines.append(line.split(":", 1)[1].lstrip())
-
-        completed_result = self._handle_sse_event(
-            event_name,
-            data_lines,
-            deltas,
-            request_started=request_started,
-            request_id=request_id,
-            response_model=response_model,
-            transport_first_byte_ms=transport_first_byte_ms,
-            transport_first_text_delta_ms=transport_first_text_delta_ms,
-            response_metrics_payload=response_metrics_payload,
-        )
-        if completed_result is not None:
-            return completed_result
+        payload = json.loads(raw_body.decode("utf-8"))
+        transport_completed_ms = (time.perf_counter() - request_started) * 1000.0
+        metrics_payload = payload.get("metrics", {})
+        if not isinstance(metrics_payload, dict):
+            metrics_payload = {}
         return TranslationResult(
-            text="".join(deltas).strip(),
-            request_id=request_id,
-            model=response_model,
+            text=str(payload.get("output_text", "")).strip(),
+            request_id=str(payload.get("id", "")),
+            model=str(payload.get("model", self.model)),
             metrics=self._build_metrics(
                 transport_first_byte_ms=transport_first_byte_ms,
-                transport_first_text_delta_ms=transport_first_text_delta_ms,
-                transport_completed_ms=(time.perf_counter() - request_started) * 1000.0,
-                response_metrics_payload=response_metrics_payload,
+                transport_first_text_delta_ms=transport_completed_ms,
+                transport_completed_ms=transport_completed_ms,
+                response_metrics_payload=metrics_payload,
             ),
         )
 
-    def _handle_sse_event(
-        self,
-        event_name: str,
-        data_lines: list[str],
-        deltas: list[str],
-        *,
-        request_started: float,
-        request_id: str,
-        response_model: str,
-        transport_first_byte_ms: float,
-        transport_first_text_delta_ms: float | None,
-        response_metrics_payload: dict[str, object],
-    ) -> TranslationResult | None:
-        if not event_name or not data_lines:
-            return None
-        payload = json.loads("\n".join(data_lines))
-        if event_name == "response.output_text.delta":
-            deltas.append(str(payload.get("delta", "")))
-            return None
-        if event_name == "response.completed":
-            output_text = str(payload.get("output_text", ""))
-            return TranslationResult(
-                text=output_text.strip() if output_text else "".join(deltas).strip(),
-                request_id=str(payload.get("id", request_id)),
-                model=response_model,
-                metrics=self._build_metrics(
-                    transport_first_byte_ms=transport_first_byte_ms,
-                    transport_first_text_delta_ms=transport_first_text_delta_ms,
-                    transport_completed_ms=(time.perf_counter() - request_started) * 1000.0,
-                    response_metrics_payload=response_metrics_payload,
-                ),
-            )
-        return None
+    def _service_base_parts(self) -> SplitResult:
+        parts = urlsplit(self.service_base_url.rstrip("/"))
+        if parts.scheme not in {"http", "https"}:
+            raise ValueError(f"unsupported llm-responses base URL scheme: {parts.scheme!r}")
+        if not parts.hostname:
+            raise ValueError(f"invalid llm-responses base URL: {self.service_base_url!r}")
+        return parts
+
+    def _responses_path(self) -> str:
+        parts = self._service_base_parts()
+        base_path = parts.path.rstrip("/")
+        if base_path:
+            return f"{base_path}/v1/responses"
+        return "/v1/responses"
+
+    def _get_connection(self) -> http.client.HTTPConnection | http.client.HTTPSConnection:
+        if self._connection is not None:
+            return self._connection
+        parts = self._service_base_parts()
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        if parts.scheme == "https":
+            self._connection = http.client.HTTPSConnection(parts.hostname, port, timeout=self.timeout_seconds)
+        else:
+            self._connection = http.client.HTTPConnection(parts.hostname, port, timeout=self.timeout_seconds)
+        return self._connection
+
+    def _close_connection(self) -> None:
+        if self._connection is not None:
+            try:
+                self._connection.close()
+            except OSError:
+                pass
+            self._connection = None
+
+    def _get_second_pass_translator(self) -> LlmResponsesTranslator:
+        second_pass_model = self.second_pass_model.strip()
+        translator = self._second_pass_translator
+        if translator is not None and translator.model == second_pass_model:
+            return translator
+        translator = LlmResponsesTranslator(
+            service_base_url=self.service_base_url,
+            model=second_pass_model,
+            second_pass_model=second_pass_model,
+            first_pass_input_template=self.first_pass_input_template,
+            first_pass_inline_user_prompt=self.first_pass_inline_user_prompt,
+            second_pass_inline_user_prompt=self.second_pass_inline_user_prompt,
+            second_pass_input_template=self.second_pass_input_template,
+            source_language=self.source_language,
+            target_language=self.target_language,
+            max_length=self.max_length,
+            sampling_topk=self.sampling_topk,
+            sampling_topp=self.sampling_topp,
+            sampling_temperature=self.sampling_temperature,
+            repetition_penalty=self.repetition_penalty,
+            timeout_seconds=self.timeout_seconds,
+        )
+        self._second_pass_translator = translator
+        return translator
 
     def _build_metrics(
         self,
@@ -370,6 +364,11 @@ class LlmResponsesTranslator:
             transport_first_byte_ms=transport_first_byte_ms,
             transport_first_text_delta_ms=transport_first_text_delta_ms,
             transport_completed_ms=transport_completed_ms,
+            engine_queue_wait_ms=_maybe_float(response_metrics_payload.get("engine_queue_wait_ms")),
+            backend_inference_wall_ms=_maybe_float(response_metrics_payload.get("backend_inference_wall_ms")),
+            engine_total_wall_ms=_maybe_float(response_metrics_payload.get("engine_total_wall_ms")),
+            engine_outside_backend_wall_ms=_maybe_float(response_metrics_payload.get("engine_outside_backend_wall_ms")),
+            pool_total_wall_ms=_maybe_float(response_metrics_payload.get("pool_total_wall_ms")),
             engine_tokenize_ms=_maybe_float(response_metrics_payload.get("engine_tokenize_ms")),
             gpu_time_to_first_token_ms=_maybe_float(response_metrics_payload.get("gpu_time_to_first_token_ms")),
             gpu_generate_total_ms=_maybe_float(response_metrics_payload.get("gpu_generate_total_ms")),
