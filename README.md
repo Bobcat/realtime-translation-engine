@@ -65,3 +65,7 @@ Run tests:
 ```bash
 PYTHONPATH=src python3 -m unittest tests.test_core tests.test_live_runner tests.test_source_state tests.test_translators
 ```
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
