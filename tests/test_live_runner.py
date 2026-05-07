@@ -86,6 +86,27 @@ class LiveRunnerTests(unittest.TestCase):
         self.assertEqual(second_request.opportunity.lane, "commit")
         self.assertEqual(second_request.opportunity.source_window, " Next.")
 
+    def test_retire_inflight_allows_manual_commit_dispatch_from_current_state(self) -> None:
+        runner = LiveRunner(core=TranslationCore())
+        source_state = SourceTranscriptState()
+
+        first_commit = SourceEvent(kind="c", text="Hello", line_number=1)
+        source_state.apply_event(first_commit)
+        first_request = runner.on_source_event(first_commit, source_state).dispatch_request
+        assert first_request is not None
+
+        self.assertTrue(runner.retire_inflight())
+
+        manual_commit = SourceEvent(kind="c", text=" world", line_number=2)
+        source_state.apply_event(manual_commit)
+        step = runner.on_source_event(manual_commit, source_state)
+
+        self.assertIsNotNone(step.dispatch_request)
+        assert step.dispatch_request is not None
+        self.assertEqual(step.dispatch_request.request_id, 2)
+        self.assertEqual(step.dispatch_request.opportunity.lane, "commit")
+        self.assertEqual(step.dispatch_request.opportunity.source_window, "Hello world")
+
     def test_commit_work_is_rematerialized_from_current_open_chunks(self) -> None:
         runner = LiveRunner(core=TranslationCore())
         source_state = SourceTranscriptState()

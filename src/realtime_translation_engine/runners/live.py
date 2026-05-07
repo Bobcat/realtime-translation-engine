@@ -28,6 +28,16 @@ class LiveRunner:
         self._commit_needed = False
         self._pending_preview_text = ""
 
+    def retire_inflight(self) -> bool:
+        if self._inflight_request is None:
+            self._commit_needed = False
+            self._pending_preview_text = ""
+            return False
+        self._inflight_request = None
+        self._commit_needed = False
+        self._pending_preview_text = ""
+        return True
+
     def on_source_event(
         self,
         event: SourceEvent,
